@@ -14,6 +14,9 @@ class ConcurrentTaskExecutor:
         future: Future = self._pool.submit(fn, *args, **kwargs)
         return future.result()
 
+    def submit(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Future:
+        return self._pool.submit(fn, *args, **kwargs)
+
     def shutdown(self, wait: bool = True):
         self._pool.shutdown(wait=wait)
 

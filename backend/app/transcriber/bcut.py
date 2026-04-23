@@ -1,5 +1,6 @@
 import json
 import logging
+import random
 import time
 from typing import Optional, List, Dict, Union
 
@@ -27,13 +28,22 @@ API_CREATE_TASK = API_BASE_URL + "/task"
 # 查询结果
 API_QUERY_RESULT = API_BASE_URL + "/task/result"
 
+# B 站侧偶发会返回该错误（非鉴权类），通常是短暂抖动/拥塞。
+_TRANSIENT_ERROR_CODES = {139201}
+_DEFAULT_TIMEOUT_SECS = 30
+_DEFAULT_RETRY_TIMES = 5
+
 logger = get_logger(__name__)
 
 class BcutTranscriber(Transcriber):
     """必剪 语音识别接口"""
     headers = {
         'User-Agent': 'Bilibili/1.0.0 (https://www.bilibili.com)',
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        # Some member.bilibili.com endpoints are picky about Origin/Referer.
+        'Origin': 'https://member.bilibili.com',
+        'Referer': 'https://member.bilibili.com/',
+        'Accept': 'application/json, text/plain, */*',
     }
 
     def __init__(self):
@@ -99,50 +109,93 @@ class BcutTranscriber(Transcriber):
             start_range = clip * self.__per_size
             end_range = min((clip + 1) * self.__per_size, len(file_binary))
             logger.info(f"开始上传分片{clip}: {start_range}-{end_range}")
-            resp = self.session.put(
-                self.__upload_urls[clip],
-                data=file_binary[start_range:end_range],
-                headers={'Content-Type': 'application/octet-stream'}
-            )
-            resp.raise_for_status()
-            etag = resp.headers.get("Etag", "").strip('"')
-            self.__etags.append(etag)
-            logger.info(f"分片{clip}上传成功: {etag}")
+            last_err: Optional[Exception] = None
+            for attempt in range(5):
+                try:
+                    resp = self.session.put(
+                        self.__upload_urls[clip],
+                        data=file_binary[start_range:end_range],
+                        headers={'Content-Type': 'application/octet-stream'},
+                        timeout=_DEFAULT_TIMEOUT_SECS,
+                    )
+                    resp.raise_for_status()
+                    etag = resp.headers.get("Etag", "").strip('"')
+                    self.__etags.append(etag)
+                    logger.info(f"分片{clip}上传成功: {etag}")
+                    break
+                except requests.RequestException as e:
+                    last_err = e
+                    if attempt < 4:
+                        sleep_s = (2**attempt) + random.uniform(0, 0.3)
+                        logger.warning(f"分片{clip}上传失败，{sleep_s:.1f}s 后重试: {e}")
+                        time.sleep(sleep_s)
+                        continue
+                    raise
 
     def __commit_upload(self) -> None:
         """提交上传数据"""
-        data = json.dumps({
+        # NOTE: This endpoint expects Etags as a comma-separated string.
+        data = {
             "InBossKey": self.__in_boss_key,
             "ResourceId": self.__resource_id,
             "Etags": ",".join(self.__etags),
             "UploadId": self.__upload_id,
             "model_id": "8",
-        })
-        resp = self.session.post(
-            API_COMMIT_UPLOAD,
-            data=data,
-            headers=self.headers
-        )
-        resp.raise_for_status()
-        resp = resp.json()
-        print('Bili',resp)
-        if resp.get("code") != 0:
-            error_msg = f"上传提交失败: {resp.get('message', '未知错误')}"
+        }
+
+        last_err: Optional[Exception] = None
+        for attempt in range(_DEFAULT_RETRY_TIMES):
+            try:
+                resp = self.session.post(
+                    API_COMMIT_UPLOAD,
+                    json=data,
+                    headers=self.headers,
+                    timeout=_DEFAULT_TIMEOUT_SECS,
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+            except requests.RequestException as e:
+                last_err = e
+                if attempt < _DEFAULT_RETRY_TIMES - 1:
+                    sleep_s = (2**attempt) + random.uniform(0, 0.3)
+                    logger.warning(f"提交上传请求失败，{sleep_s:.1f}s 后重试: {e}")
+                    time.sleep(sleep_s)
+                    continue
+                raise
+
+            code = payload.get("code")
+            if code == 0:
+                self.__download_url = payload["data"]["download_url"]
+                logger.info(f"提交成功，下载链接: {self.__download_url}")
+                return
+
+            msg = payload.get("message", "未知错误")
+            # 139201: 第三方服务异常（B 站侧短暂抖动，重试通常能恢复）
+            if code in _TRANSIENT_ERROR_CODES and attempt < _DEFAULT_RETRY_TIMES - 1:
+                sleep_s = (2**attempt) + random.uniform(0, 0.3)
+                logger.warning(f"提交上传返回可重试错误 code={code} msg={msg}，{sleep_s:.1f}s 后重试")
+                time.sleep(sleep_s)
+                continue
+
+            error_msg = f"上传提交失败(code={code}): {msg}"
             logger.error(error_msg)
             raise Exception(error_msg)
-            
-        self.__download_url = resp["data"]["download_url"]
-        logger.info(f"提交成功，下载链接: {self.__download_url}")
+
+        # Should be unreachable, but keep a clear failure if it happens.
+        raise Exception(f"上传提交失败: {last_err}")
 
     def _create_task(self) -> str:
         """开始创建转换任务"""
         resp = self.session.post(
-            API_CREATE_TASK, json={"resource": self.__download_url, "model_id": "8"}, headers=self.headers
+            API_CREATE_TASK,
+            json={"resource": self.__download_url, "model_id": "8"},
+            headers=self.headers,
+            timeout=_DEFAULT_TIMEOUT_SECS,
         )
         resp.raise_for_status()
         resp = resp.json()
         if resp.get("code") != 0:
-            error_msg = f"创建任务失败: {resp.get('message', '未知错误')}"
+            error_msg = f"创建任务失败(code={resp.get('code')}): {resp.get('message', '未知错误')}"
             logger.error(error_msg)
             raise Exception(error_msg)
             
@@ -155,12 +208,13 @@ class BcutTranscriber(Transcriber):
         resp = self.session.get(
             API_QUERY_RESULT, 
             params={"model_id": 7, "task_id": self.task_id}, 
-            headers=self.headers
+            headers=self.headers,
+            timeout=_DEFAULT_TIMEOUT_SECS,
         )
         resp.raise_for_status()
         resp = resp.json()
         if resp.get("code") != 0:
-            error_msg = f"查询结果失败: {resp.get('message', '未知错误')}"
+            error_msg = f"查询结果失败(code={resp.get('code')}): {resp.get('message', '未知错误')}"
             logger.error(error_msg)
             raise Exception(error_msg)
             

@@ -7,17 +7,19 @@ import {
   FormLabel,
   FormMessage,
 } from '@/components/ui/form.tsx'
-import { useEffect,useState } from 'react'
-import { useForm, useWatch } from 'react-hook-form'
+import { useEffect, useState } from 'react'
+import { useForm, useWatch, type FieldErrors } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 
 import { Info, Loader2, Plus } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert.tsx'
 import { generateNote } from '@/services/note.ts'
+import { detectUrl, generateBatchNote, type DetectedEntry } from '@/services/batch.ts'
 import { uploadFile } from '@/services/upload.ts'
 import { useTaskStore } from '@/store/taskStore'
 import { useModelStore } from '@/store/modelStore'
+import toast from 'react-hot-toast'
 import {
   Tooltip,
   TooltipContent,
@@ -28,6 +30,14 @@ import { Checkbox } from '@/components/ui/checkbox.tsx'
 import { ScrollArea } from '@/components/ui/scroll-area.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -37,7 +47,6 @@ import {
 import { Input } from '@/components/ui/input.tsx'
 import { Textarea } from '@/components/ui/textarea.tsx'
 import { noteStyles, noteFormats, videoPlatforms } from '@/constant/note.ts'
-import { fetchModels } from '@/services/model.ts'
 import { useNavigate } from 'react-router-dom'
 
 /* -------------------- 校验 Schema -------------------- */
@@ -83,6 +92,25 @@ const formSchema = z
   })
 
 export type NoteFormValues = z.infer<typeof formSchema>
+
+type BatchPayload = NoteFormValues & {
+  provider_id: string
+  task_id: string
+}
+
+type BatchTask = {
+  video_url: string
+  title: string
+  task_id: string
+}
+
+const getErrorMessage = (error: unknown, fallback: string) => {
+  if (error instanceof Error && error.message) {
+    return error.message
+  }
+
+  return fallback
+}
 
 /* -------------------- 可复用子组件 -------------------- */
 const SectionHeader = ({ title, tip }: { title: string; tip?: string }) => (
@@ -131,10 +159,22 @@ const NoteForm = () => {
   const navigate = useNavigate();
   const [isUploading, setIsUploading] = useState(false)
   const [uploadSuccess, setUploadSuccess] = useState(false)
+  const [detectingUrl, setDetectingUrl] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewEntries, setPreviewEntries] = useState<DetectedEntry[]>([])
+  const [selectedVideoUrls, setSelectedVideoUrls] = useState<Record<string, boolean>>({})
+  const [pendingBatchPayload, setPendingBatchPayload] = useState<BatchPayload | null>(null)
+  const [activeBatch, setActiveBatch] = useState<
+    | null
+    | {
+        batchId: string
+        items: BatchTask[]
+      }
+  >(null)
   /* ---- 全局状态 ---- */
   const { addPendingTask, currentTaskId, setCurrentTask, getCurrentTask, retryTask } =
     useTaskStore()
-  const { loadEnabledModels, modelList, showFeatureHint, setShowFeatureHint } = useModelStore()
+  const { loadEnabledModels, modelList } = useModelStore()
 
   /* ---- 表单 ---- */
   const form = useForm<NoteFormValues>({
@@ -166,7 +206,24 @@ const NoteForm = () => {
     return
   }, [])
   useEffect(() => {
-    if (!currentTask) return
+    if (!currentTask) {
+      form.reset({
+        platform: 'bilibili',
+        video_url: '',
+        model_name: modelList[0]?.model_name || '',
+        style: 'minimal',
+        quality: 'medium',
+        extras: '',
+        screenshot: false,
+        link: false,
+        video_understanding: false,
+        video_interval: 6,
+        grid_size: [2, 2],
+        format: [],
+      })
+      return
+    }
+
     const { formData } = currentTask
 
     console.log('currentTask.formData.platform:', formData.platform)
@@ -195,6 +252,7 @@ const NoteForm = () => {
   ])
 
   /* ---- 帮助函数 ---- */
+  const isBilibiliSpaceUrl = (u?: string) => /space\.bilibili\.com\/(\d+)/.test(String(u || ''))
   const isGenerating = () => !['SUCCESS', 'FAILED', undefined].includes(getCurrentTask()?.status)
   const generating = isGenerating()
   const handleFileUpload = async (file: File, cb: (url: string) => void) => {
@@ -216,20 +274,134 @@ const NoteForm = () => {
     }
   }
 
+  const openPreview = (entries: DetectedEntry[], payloadForBatch: BatchPayload) => {
+    const selected: Record<string, boolean> = {}
+    for (const e of entries) {
+      if (e.video_url) selected[e.video_url] = true
+    }
+    setPreviewEntries(entries)
+    setSelectedVideoUrls(selected)
+    setPendingBatchPayload(payloadForBatch)
+    setPreviewOpen(true)
+  }
+
+  const confirmBatchGenerate = async () => {
+    const payload = pendingBatchPayload
+    if (!payload) return
+
+    const urls = Object.entries(selectedVideoUrls)
+      .filter(([, v]) => v)
+      .map(([u]) => u)
+      .filter(Boolean)
+
+    if (!urls.length) {
+      toast.error('请至少选择 1 个视频')
+      return
+    }
+
+    try {
+      setDetectingUrl(true)
+      const res = await generateBatchNote({
+        video_urls: urls,
+        platform: payload.platform,
+        quality: payload.quality,
+        model_name: payload.model_name,
+        provider_id: payload.provider_id,
+        format: payload.format || [],
+        style: payload.style,
+        extras: payload.extras,
+        screenshot: payload.screenshot,
+        link: payload.link,
+        video_understanding: payload.video_understanding,
+        video_interval: payload.video_interval,
+        grid_size: payload.grid_size || [2, 2],
+      })
+
+      const taskMap = res.task_map || []
+      const titleByUrl = new Map(previewEntries.map(e => [e.video_url, e.title]))
+      const items: BatchTask[] = taskMap.map((x: { video_url: string; task_id: string }) => ({
+        video_url: x.video_url,
+        task_id: x.task_id,
+        title: titleByUrl.get(x.video_url) || x.video_url,
+      }))
+
+      for (const it of items) {
+        addPendingTask(it.task_id, payload.platform, { ...payload, video_url: it.video_url })
+      }
+
+      setActiveBatch({ batchId: res.batch_id, items })
+      setPreviewOpen(false)
+      toast.success(`已提交批量任务：${items.length} 个`)
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, '批量提交失败'))
+    } finally {
+      setDetectingUrl(false)
+    }
+  }
+
+  const selectedCount = previewEntries.reduce((acc, e) => acc + (selectedVideoUrls[e.video_url] ? 1 : 0), 0)
+
   const onSubmit = async (values: NoteFormValues) => {
-    console.log('Not even go here')
-    const payload: NoteFormValues = {
+    const providerId = modelList.find(m => m.model_name === values.model_name)?.provider_id
+    if (!providerId) {
+      toast.error('请选择模型')
+      return
+    }
+
+    const payload: BatchPayload = {
       ...values,
-      provider_id: modelList.find(m => m.model_name === values.model_name)!.provider_id,
+      provider_id: providerId,
       task_id: currentTaskId || '',
+    }
+
+    // Collection/space links are multi-video flows; retrying a single task ID here is incorrect.
+    if (currentTaskId && isBilibiliSpaceUrl(values.video_url)) {
+      toast.error('合集链接不支持“重试/重新生成”，请点「新建笔记」后再操作')
+      return
     }
     if (currentTaskId) {
       retryTask(currentTaskId, payload)
       return
     }
 
-    // message.success('已提交任务')
-    const  data  = await generateNote(payload)
+    if (values.platform !== 'local') {
+      // Force multi-video preview for bilibili space URLs.
+      if (isBilibiliSpaceUrl(values.video_url)) {
+        try {
+          setDetectingUrl(true)
+          const detected = await detectUrl(values.video_url || '')
+          const n = detected?.entries?.length || 0
+          if (n > 1) {
+            openPreview(detected.entries, payload)
+            return
+          }
+          toast.error('未解析到视频列表，请稍后重试')
+          return
+        } catch (error: unknown) {
+          console.warn('detect_url failed for bilibili space url:', error)
+          toast.error(getErrorMessage(error, '解析视频列表失败，请稍后重试'))
+          return
+        } finally {
+          setDetectingUrl(false)
+        }
+      }
+
+      // Other URLs: detection is best-effort.
+      try {
+        setDetectingUrl(true)
+        const detected = await detectUrl(values.video_url || '')
+        if (detected?.type === 'multi' && (detected.entries?.length || 0) > 1) {
+          openPreview(detected.entries, payload)
+          return
+        }
+      } catch (error: unknown) {
+        console.warn('detect_url failed, fallback to generate_note:', error)
+      } finally {
+        setDetectingUrl(false)
+      }
+    }
+
+    const data = await generateNote(payload)
     addPendingTask(data.task_id, values.platform, payload)
   }
   const onInvalid = (errors: FieldErrors<NoteFormValues>) => {
@@ -244,16 +416,61 @@ const NoteForm = () => {
   const FormButton = () => {
     const label = generating ? '正在生成…' : editing ? '重新生成' : '生成笔记'
 
+    const handlePreviewClick = async () => {
+      const v = form.getValues()
+      if (!v.video_url || v.platform === 'local') {
+        toast.error('请输入在线视频链接后再预览')
+        return
+      }
+      const providerId = modelList.find(m => m.model_name === v.model_name)?.provider_id
+      if (!providerId) {
+        toast.error('请选择模型')
+        return
+      }
+
+      const payload: BatchPayload = {
+        ...v,
+        provider_id: providerId,
+        task_id: '',
+      }
+      try {
+        setDetectingUrl(true)
+        const detected = await detectUrl(v.video_url)
+        if ((detected.entries?.length || 0) <= 1) {
+          toast('检测到单个视频')
+          return
+        }
+        openPreview(detected.entries, payload)
+      } catch (error: unknown) {
+        // Keep error explicit for space/collection URLs; otherwise users may think it generated only one item.
+        toast.error(
+          getErrorMessage(
+            error,
+            isBilibiliSpaceUrl(v.video_url) ? '解析视频列表失败，请稍后重试' : '预览失败',
+          ),
+        )
+      } finally {
+        setDetectingUrl(false)
+      }
+    }
+
     return (
       <div className="flex gap-2">
         <Button
           type="submit"
           className={!editing ? 'w-full' : 'w-2/3' + ' bg-primary'}
-          disabled={generating}
+          disabled={generating || detectingUrl}
         >
           {generating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          {detectingUrl && !generating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           {label}
         </Button>
+
+        {!editing && (
+          <Button type="button" variant="outline" onClick={handlePreviewClick} disabled={detectingUrl}>
+            预览
+          </Button>
+        )}
 
         {editing && (
           <Button type="button" variant="outline" className="w-1/3" onClick={handleCreateNew}>
@@ -272,6 +489,14 @@ const NoteForm = () => {
         <form onSubmit={form.handleSubmit(onSubmit, onInvalid)} className="space-y-4">
           {/* 顶部按钮 */}
           <FormButton></FormButton>
+
+          {activeBatch && (
+            <Alert>
+              <AlertDescription>
+                批次 {activeBatch.batchId}：共 {activeBatch.items.length} 个任务已提交。
+              </AlertDescription>
+            </Alert>
+          )}
 
           {/* 视频链接 & 平台 */}
           <SectionHeader title="视频链接" tip="支持 B 站、YouTube 等平台" />
@@ -328,52 +553,43 @@ const NoteForm = () => {
             />
           </div>
 
-          <FormField
-            control={form.control}
-            name="video_url"
-            render={({ field }) => (
-              <FormItem className="flex-1">
-                {platform === 'local' && (
-                  <>
-                    <div
-                      className="hover:border-primary mt-2 flex h-40 cursor-pointer items-center justify-center rounded-md border-2 border-dashed border-gray-300 transition-colors"
-                      onDragOver={e => {
-                        e.preventDefault()
-                        e.stopPropagation()
-                      }}
-                      onDrop={e => {
-                        e.preventDefault()
-                        const file = e.dataTransfer.files?.[0]
-                        if (file) handleFileUpload(file, field.onChange)
-                      }}
-                      onClick={() => {
-                        const input = document.createElement('input')
-                        input.type = 'file'
-                        input.accept = 'video/*'
-                        input.onchange = e => {
-                          const file = (e.target as HTMLInputElement).files?.[0]
-                          if (file) handleFileUpload(file, field.onChange)
-                        }
-                        input.click()
-                      }}
-                    >
-                      {isUploading ? (
-                        <p className="text-center text-sm text-blue-500">上传中，请稍候…</p>
-                      ) : uploadSuccess ? (
-                        <p className="text-center text-sm text-green-500">上传成功！</p>
-                      ) : (
-                        <p className="text-center text-sm text-gray-500">
-                          拖拽文件到这里上传 <br />
-                          <span className="text-xs text-gray-400">或点击选择文件</span>
-                        </p>
-                      )}
-                    </div>
-                  </>
+          {platform === 'local' && (
+            <FormItem className="flex-1">
+              <div
+                className="hover:border-primary mt-2 flex h-40 cursor-pointer items-center justify-center rounded-md border-2 border-dashed border-gray-300 transition-colors"
+                onDragOver={e => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                }}
+                onDrop={e => {
+                  e.preventDefault()
+                  const file = e.dataTransfer.files?.[0]
+                  if (file) handleFileUpload(file, url => form.setValue('video_url', url, { shouldDirty: true }))
+                }}
+                onClick={() => {
+                  const input = document.createElement('input')
+                  input.type = 'file'
+                  input.accept = 'video/*'
+                  input.onchange = e => {
+                    const file = (e.target as HTMLInputElement).files?.[0]
+                    if (file) handleFileUpload(file, url => form.setValue('video_url', url, { shouldDirty: true }))
+                  }
+                  input.click()
+                }}
+              >
+                {isUploading ? (
+                  <p className="text-center text-sm text-blue-500">上传中，请稍候…</p>
+                ) : uploadSuccess ? (
+                  <p className="text-center text-sm text-green-500">上传成功！</p>
+                ) : (
+                  <p className="text-center text-sm text-gray-500">
+                    拖拽文件到这里上传 <br />
+                    <span className="text-xs text-gray-400">或点击选择文件</span>
+                  </p>
                 )}
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+              </div>
+            </FormItem>
+          )}
           <div className="grid grid-cols-2 gap-2">
             {/* 模型选择 */}
             {
@@ -457,7 +673,7 @@ const NoteForm = () => {
             <FormField
               control={form.control}
               name="video_understanding"
-              render={({ field }) => (
+              render={() => (
                 <FormItem>
                   <div className="flex items-center gap-2">
                     <FormLabel>启用</FormLabel>
@@ -554,6 +770,72 @@ const NoteForm = () => {
           />
         </form>
       </Form>
+
+      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>视频列表预览（共 {previewEntries.length} 条）</DialogTitle>
+            <DialogDescription>
+              勾选要生成笔记的视频，然后点击“批量生成”。已选 {selectedCount} 条。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+            <label className="flex items-center gap-2">
+              <Checkbox
+                checked={previewEntries.length > 0 && selectedCount === previewEntries.length}
+                onCheckedChange={checked => {
+                  const next: Record<string, boolean> = {}
+                  for (const e of previewEntries) next[e.video_url] = !!checked
+                  setSelectedVideoUrls(next)
+                }}
+              />
+              全选
+            </label>
+            <div className="text-neutral-500">已选 {selectedCount}/{previewEntries.length}</div>
+          </div>
+
+          <ScrollArea className="h-[380px] pr-2">
+            <div className="space-y-2">
+              {previewEntries.map(e => (
+                <label key={e.video_url} className="flex items-start gap-3 rounded-md border p-3">
+                  <Checkbox
+                    checked={!!selectedVideoUrls[e.video_url]}
+                    onCheckedChange={checked =>
+                      setSelectedVideoUrls(prev => ({ ...prev, [e.video_url]: !!checked }))
+                    }
+                  />
+                  <div className="min-w-0">
+                    <div
+                      className="font-medium text-sm leading-5"
+                      title={e.title || e.video_url}
+                      style={{
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {e.title || e.video_url}
+                    </div>
+                    <div className="truncate text-xs text-neutral-500">{e.video_url}</div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </ScrollArea>
+
+          <DialogFooter>
+            <div className="mr-auto text-sm text-neutral-600">已选 {selectedCount}/{previewEntries.length}</div>
+            <Button variant="outline" onClick={() => setPreviewOpen(false)}>
+              取消
+            </Button>
+            <Button onClick={confirmBatchGenerate} disabled={detectingUrl}>
+              批量生成
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

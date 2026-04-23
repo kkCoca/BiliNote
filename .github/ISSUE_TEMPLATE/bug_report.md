@@ -3,7 +3,7 @@ name: Bug report
 about: 上报一些bug
 title: "[BUG]"
 labels: bug
-assignees: JefferyHcool
+assignees: kkCoca
 
 ---
 

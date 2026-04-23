@@ -74,35 +74,42 @@ def save_note_to_file(task_id: str, note):
         json.dump(asdict(note), f, ensure_ascii=False, indent=2)
 
 
-def run_note_task(task_id: str, video_url: str, platform: str, quality: DownloadQuality,
-                  link: bool = False, screenshot: bool = False, model_name: str = None, provider_id: str = None,
-                  _format: list = None, style: str = None, extras: str = None, video_understanding: bool = False,
-                  video_interval=0, grid_size=[]
-                  ):
-
+def _run_note_task_impl(
+    task_id: str,
+    video_url: str,
+    platform: str,
+    quality: DownloadQuality,
+    link: bool = False,
+    screenshot: bool = False,
+    model_name: str | None = None,
+    provider_id: str | None = None,
+    _format: list | None = None,
+    style: str | None = None,
+    extras: str | None = None,
+    video_understanding: bool = False,
+    video_interval=0,
+    grid_size=None,
+):
     if not model_name or not provider_id:
         raise HTTPException(status_code=400, detail="请选择模型和提供者")
 
-    def _execute_note_task():
-        return NoteGenerator().generate(
-            video_url=video_url,
-            platform=platform,
-            quality=quality,
-            task_id=task_id,
-            model_name=model_name,
-            provider_id=provider_id,
-            link=link,
-            _format=_format,
-            style=style,
-            extras=extras,
-            screenshot=screenshot,
-            video_understanding=video_understanding,
-            video_interval=video_interval,
-            grid_size=grid_size,
-        )
+    note = NoteGenerator().generate(
+        video_url=video_url,
+        platform=platform,
+        quality=quality,
+        task_id=task_id,
+        model_name=model_name,
+        provider_id=provider_id,
+        link=link,
+        _format=_format,
+        style=style,
+        extras=extras,
+        screenshot=screenshot,
+        video_understanding=video_understanding,
+        video_interval=video_interval,
+        grid_size=grid_size or [],
+    )
 
-    logger.info(f"任务进入执行队列 (task_id={task_id})")
-    note = task_serial_executor.run(_execute_note_task)
     logger.info(f"Note generated: {task_id}")
     if not note or not note.markdown:
         logger.warning(f"任务 {task_id} 执行失败，跳过保存")
@@ -111,10 +118,51 @@ def run_note_task(task_id: str, video_url: str, platform: str, quality: Download
 
     # 自动建立向量索引（用于 AI 问答），失败不影响笔记生成
     try:
+        # Default off: indexing may download large models and is not required for note generation.
+        if str(os.getenv('ENABLE_VECTOR_INDEX', '0')).lower() not in ('1', 'true', 'yes'):
+            return
+
+        # Fire-and-forget; never block note generation.
+        import threading
+
         from app.services.vector_store import VectorStoreManager
-        VectorStoreManager().index_task(task_id)
+
+        def _index_async():
+            try:
+                VectorStoreManager().index_task(task_id)
+            except Exception as e:
+                logger.warning(f"向量索引失败（不影响笔记）: {e}")
+
+        threading.Thread(target=_index_async, daemon=True).start()
     except Exception as e:
-        logger.warning(f"向量索引失败（不影响笔记）: {e}")
+        logger.warning(f"向量索引启动失败（不影响笔记）: {e}")
+
+
+def run_note_task(task_id: str, video_url: str, platform: str, quality: DownloadQuality,
+                  link: bool = False, screenshot: bool = False, model_name: str = None, provider_id: str = None,
+                  _format: list = None, style: str = None, extras: str = None, video_understanding: bool = False,
+                  video_interval=0, grid_size=[]
+                  ):
+
+    logger.info(f"任务进入执行队列 (task_id={task_id})")
+    # Offload the full task to the shared executor.
+    task_serial_executor.run(
+        _run_note_task_impl,
+        task_id,
+        video_url,
+        platform,
+        quality,
+        link,
+        screenshot,
+        model_name,
+        provider_id,
+        _format,
+        style,
+        extras,
+        video_understanding,
+        video_interval,
+        grid_size,
+    )
 
 
 @router.post('/delete_task')
@@ -142,6 +190,11 @@ async def upload(file: UploadFile = File(...)):
 @router.post("/generate_note")
 def generate_note(data: VideoRequest, background_tasks: BackgroundTasks):
     try:
+        # Prevent accidental single-note generation for multi-video pages.
+        url_s = str(data.video_url or '')
+        if 'space.bilibili.com' in url_s and '/upload/video' in url_s:
+            raise HTTPException(status_code=400, detail='检测到合集/空间链接，请先点击“预览”选择视频后再批量生成')
+
 
         video_id = extract_video_id(data.video_url, data.platform)
         # if not video_id:
@@ -167,6 +220,8 @@ def generate_note(data: VideoRequest, background_tasks: BackgroundTasks):
                                   data.screenshot, data.model_name, data.provider_id, data.format, data.style,
                                   data.extras, data.video_understanding, data.video_interval, data.grid_size)
         return R.success({"task_id": task_id})
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

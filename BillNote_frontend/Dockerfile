@@ -1,5 +1,5 @@
 # === 前端构建阶段 ===
-FROM node:18-alpine AS builder
+FROM node:22-bookworm-slim AS builder
 
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
@@ -7,7 +7,9 @@ WORKDIR /app
 
 # 先复制 lockfile 利用依赖层缓存
 COPY ./BillNote_frontend/package.json ./BillNote_frontend/pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile \
+  && pnpm approve-builds --all \
+  && pnpm rebuild
 
 # 再复制源代码并构建
 COPY ./BillNote_frontend/ ./

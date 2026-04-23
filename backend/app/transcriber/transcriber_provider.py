@@ -1,11 +1,6 @@
 import os
 import platform
 from enum import Enum
-
-from app.transcriber.groq import GroqTranscriber
-from app.transcriber.whisper import WhisperTranscriber
-from app.transcriber.bcut import BcutTranscriber
-from app.transcriber.kuaishou import KuaishouTranscriber
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -38,36 +33,54 @@ _transcribers = {
     TranscriberType.GROQ: None,
 }
 
-# 公共实例初始化函数
-def _init_transcriber(key: TranscriberType, cls, *args, **kwargs):
+# 公共实例初始化函数（延迟导入）
+def _init_transcriber(key: TranscriberType, module_name: str, class_name: str, *args, **kwargs):
     if _transcribers[key] is None:
-        logger.info(f'创建 {cls.__name__} 实例: {key}')
+        logger.info(f'创建 {class_name} 实例: {key}')
         try:
+            module = __import__(f'app.transcriber.{module_name}', fromlist=[class_name])
+            cls = getattr(module, class_name)
             _transcribers[key] = cls(*args, **kwargs)
-            logger.info(f'{cls.__name__} 创建成功')
+            logger.info(f'{class_name} 创建成功')
         except Exception as e:
-            logger.error(f"{cls.__name__} 创建失败: {e}")
+            logger.error(f"{class_name} 创建失败: {e}")
             raise
     return _transcribers[key]
 
-# 各类型获取方法
+
+# 各类型获取方法（使用延迟导入）
 def get_groq_transcriber():
-    return _init_transcriber(TranscriberType.GROQ, GroqTranscriber)
+    return _init_transcriber(TranscriberType.GROQ, 'groq', 'GroqTranscriber')
+
 
 def get_whisper_transcriber(model_size="base", device="cuda"):
-    return _init_transcriber(TranscriberType.FAST_WHISPER, WhisperTranscriber, model_size=model_size, device=device)
+    return _init_transcriber(
+        TranscriberType.FAST_WHISPER,
+        'whisper',
+        'WhisperTranscriber',
+        model_size=model_size,
+        device=device,
+    )
+
 
 def get_bcut_transcriber():
-    return _init_transcriber(TranscriberType.BCUT, BcutTranscriber)
+    return _init_transcriber(TranscriberType.BCUT, 'bcut', 'BcutTranscriber')
+
 
 def get_kuaishou_transcriber():
-    return _init_transcriber(TranscriberType.KUAISHOU, KuaishouTranscriber)
+    return _init_transcriber(TranscriberType.KUAISHOU, 'kuaishou', 'KuaishouTranscriber')
+
 
 def get_mlx_whisper_transcriber(model_size="base"):
     if not MLX_WHISPER_AVAILABLE:
         logger.warning("MLX Whisper 不可用，请确保在 Apple 平台且已安装 mlx_whisper")
         raise ImportError("MLX Whisper 不可用")
-    return _init_transcriber(TranscriberType.MLX_WHISPER, MLXWhisperTranscriber, model_size=model_size)
+    return _init_transcriber(
+        TranscriberType.MLX_WHISPER,
+        'mlx_whisper_transcriber',
+        'MLXWhisperTranscriber',
+        model_size=model_size,
+    )
 
 # 通用入口
 def get_transcriber(transcriber_type="fast-whisper", model_size="base", device="cuda"):

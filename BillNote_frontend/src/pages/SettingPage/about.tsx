@@ -2,7 +2,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Github, Star, ExternalLink, Download } from 'lucide-react'
+import { Github, ExternalLink, Download } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area.tsx'
 import logo from '@/assets/icon.svg'
 
@@ -48,13 +48,13 @@ export default function AboutPage() {
               </a>
             </Button>
             <Button variant="outline" asChild>
-              <a href="https://github.com/JefferyHcool/BiliNote" target="_blank">
+              <a href="https://github.com/kkCoca/BiliNote" target="_blank">
                 <Github className="mr-2 h-4 w-4" />
                 GitHub 仓库
               </a>
             </Button>
             <Button variant="outline" asChild>
-              <a href="https://github.com/JefferyHcool/BiliNote/releases" target="_blank">
+              <a href="https://github.com/kkCoca/BiliNote/releases" target="_blank">
                 <Download className="mr-2 h-4 w-4" />
                 下载桌面版
               </a>
@@ -129,7 +129,7 @@ export default function AboutPage() {
               <div>
                 <h3 className="mb-3 text-xl font-semibold">1. 克隆仓库</h3>
                 <div className="bg-muted rounded-md p-4 font-mono text-sm">
-                  git clone https://github.com/JefferyHcool/BiliNote.git
+                  git clone https://github.com/kkCoca/BiliNote.git
                   <br />
                   cd BiliNote
                   <br />
@@ -164,7 +164,7 @@ export default function AboutPage() {
               <div>
                 <h3 className="mb-3 text-xl font-semibold">1. 克隆仓库</h3>
                 <div className="bg-muted rounded-md p-4 font-mono text-sm">
-                  git clone https://github.com/JefferyHcool/BiliNote.git
+                  git clone https://github.com/kkCoca/BiliNote.git
                   <br />
                   cd BiliNote
                   <br />

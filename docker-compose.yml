@@ -1,5 +1,15 @@
 
 services:
+  opencli:
+    container_name: bilinote-opencli
+    build:
+      context: ./opencli
+      dockerfile: Dockerfile
+    # Host Chrome extension connects to localhost:19825.
+    ports:
+      - "127.0.0.1:19825:19825"
+    restart: on-failure:3
+
   backend:
     container_name: bilinote-backend
     build:
@@ -13,10 +23,19 @@ services:
     environment:
       - BACKEND_PORT=${BACKEND_PORT}
       - BACKEND_HOST=${BACKEND_HOST}
+      - OPENCLI_SERVICE_URL=http://opencli:19826
+      # Some environments forbid making the process stack executable.
+      # ctranslate2 wheels may (incorrectly) request execstack; tell glibc loader to ignore it.
+      - GLIBC_TUNABLES=glibc.rtld.execstack=0
+      # Vector indexing downloads large onnx models; keep it opt-in.
+      - ENABLE_VECTOR_INDEX=0
     volumes:
       - ./backend:/app
     expose:
       - "${BACKEND_PORT}"  # 不再对外暴露，用于 nginx 内部通信
+    depends_on:
+      opencli:
+        condition: service_started
     restart: on-failure:3
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${BACKEND_PORT}/api/sys_health"]

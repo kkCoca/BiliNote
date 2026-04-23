@@ -71,7 +71,8 @@ class NoteGenerator:
         self.model_size: str = config_manager.get_whisper_model_size()
         self.device: Optional[str] = None
         self.transcriber_type: str = config_manager.get_transcriber_type()
-        self.transcriber: Transcriber = self._init_transcriber()
+        # Lazy init: avoid downloading/initializing heavy models unless audio transcription is actually needed.
+        self.transcriber: Optional[Transcriber] = None
         self.video_path: Optional[Path] = None
         self.video_img_urls=[]
         logger.info("NoteGenerator 初始化完成")
@@ -258,11 +259,28 @@ class NoteGenerator:
         根据环境变量 TRANSCRIBER_TYPE 动态获取并实例化转写器
         """
         if self.transcriber_type not in _transcribers:
-            logger.error(f"未找到支持的转写器：{self.transcriber_type}")
-            raise Exception(f"不支持的转写器：{self.transcriber_type}")
+            logger.warning(f"未找到支持的转写器：{self.transcriber_type}，将 fallback 到 fast-whisper")
+            self.transcriber_type = "fast-whisper"
 
         logger.info(f"使用转写器：{self.transcriber_type}")
-        return get_transcriber(transcriber_type=self.transcriber_type)
+        device = os.getenv("WHISPER_DEVICE", "cuda")
+
+        try:
+            # Respect UI config for whisper model size; prefer env override for device.
+            return get_transcriber(
+                transcriber_type=self.transcriber_type,
+                model_size=self.model_size,
+                device=device,
+            )
+        except Exception as e:
+            # Don't fail the whole task on transcriber init; fall back to local whisper.
+            logger.error(f"初始化转写器失败({self.transcriber_type})，fallback 到 fast-whisper: {e}")
+            self.transcriber_type = "fast-whisper"
+            return get_transcriber(
+                transcriber_type="fast-whisper",
+                model_size=self.model_size,
+                device=device,
+            )
 
     def _get_gpt(self, model_name: Optional[str], provider_id: Optional[str]) -> GPT:
         """
@@ -543,6 +561,17 @@ class NoteGenerator:
         task_id = transcript_cache_file.stem.split("_")[0]
         self._update_status(task_id, status_phase)
 
+        def _is_transcriber_configured(t: str) -> bool:
+            """Skip cloud transcribers when not configured, to fail over fast."""
+            if t == "groq":
+                try:
+                    from app.services.provider import ProviderService
+
+                    return bool(ProviderService.get_provider_by_id("groq"))
+                except Exception:
+                    return False
+            return True
+
         # 已有缓存，尝试加载
         if transcript_cache_file.exists():
             logger.info(f"检测到转写缓存 ({transcript_cache_file})，尝试读取")
@@ -556,12 +585,48 @@ class NoteGenerator:
         # 调用转写器
         try:
             logger.info("开始转写音频")
+            if self.transcriber is None:
+                self.transcriber = self._init_transcriber()
             transcript = self.transcriber.transcript(file_path=audio_file)
+            if transcript is None:
+                raise RuntimeError(f"转写器返回空结果: {self.transcriber_type}")
             transcript_cache_file.write_text(json.dumps(asdict(transcript), ensure_ascii=False, indent=2), encoding="utf-8")
             logger.info(f"转写并缓存成功 ({transcript_cache_file})")
             return transcript
         except Exception as exc:
-            logger.error(f"音频转写失败：{exc}")
+            msg = str(exc)
+            logger.error(f"音频转写失败：{msg}")
+
+            # Online transcribers can be flaky; try a best-effort fallback chain so tasks still complete.
+            # Prefer local first for stability.
+            fallback_order = ["fast-whisper", "groq", "kuaishou", "bcut"]
+            fallback_order = [t for t in fallback_order if t != self.transcriber_type]
+
+            device = os.getenv("WHISPER_DEVICE", "cuda")
+
+            for t in fallback_order:
+                try:
+                    if not _is_transcriber_configured(t):
+                        logger.info(f"跳过未配置的转写器: {t}")
+                        continue
+                    logger.warning(f"转写失败，尝试 fallback 到 {t}")
+                    fallback = get_transcriber(
+                        transcriber_type=t,
+                        model_size=self.model_size,
+                        device=device,
+                    )
+                    transcript = fallback.transcript(file_path=audio_file)
+                    if transcript is None:
+                        raise RuntimeError(f"转写器返回空结果: {t}")
+                    transcript_cache_file.write_text(
+                        json.dumps(asdict(transcript), ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    logger.info(f"fallback({t}) 转写并缓存成功 ({transcript_cache_file})")
+                    return transcript
+                except Exception as fallback_exc:
+                    logger.error(f"fallback({t}) 失败：{fallback_exc}")
+
             self._handle_exception(task_id, exc)
             raise
 

@@ -15,7 +15,7 @@
   <img src="https://img.shields.io/badge/GPT-openai%20%7C%20deepseek%20%7C%20qwen-ff69b4" />
   <img src="https://img.shields.io/badge/docker-ghcr.io-blue" />
   <img src="https://img.shields.io/badge/status-active-success" />
-  <img src="https://img.shields.io/github/stars/jefferyhcool/BiliNote?style=social" />
+  <img src="https://img.shields.io/github/stars/kkCoca/BiliNote?style=social" />
 </p>
 
 
@@ -31,7 +31,7 @@ BiliNote 是一个开源的 AI 视频笔记助手，支持通过哔哩哔哩、Y
 可以通过访问 [这里](https://www.bilinote.app/) 进行体验，速度略慢，不支持长视频。
 
 ## 📦 桌面版下载
-本项目提供了 Windows 和 macOS 桌面客户端，可在 [Releases](https://github.com/JefferyHcool/BiliNote/releases) 页面下载最新版本。
+本项目提供了 Windows 和 macOS 桌面客户端，可在 [Releases](https://github.com/kkCoca/BiliNote/releases) 页面下载最新版本。
 
 > Windows 用户请注意：一定要在没有中文路径的环境下运行。
 
@@ -79,12 +79,12 @@ BiliNote 是一个开源的 AI 视频笔记助手，支持通过哔哩哔哩、Y
 确保已安装 Docker，直接拉取预构建镜像运行：
 
 ```bash
-docker pull ghcr.io/jefferyhcool/bilinote:latest
+docker pull ghcr.io/kkCoca/bilinote:latest
 
 docker run -d -p 80:80 \
   -v bilinote-data:/app/backend/data \
   --name bilinote \
-  ghcr.io/jefferyhcool/bilinote:latest
+  ghcr.io/kkCoca/bilinote:latest
 ```
 
 访问：`http://localhost`
@@ -104,7 +104,7 @@ docker-compose -f docker-compose.gpu.yml up -d
 #### 1. 克隆仓库
 
 ```bash
-git clone https://github.com/JefferyHcool/BiliNote.git
+git clone https://github.com/kkCoca/BiliNote.git
 cd BiliNote
 mv .env.example .env
 ```
@@ -156,13 +156,13 @@ sudo apt install ffmpeg
 
 ```bash
 # 拉取最新镜像
-docker pull ghcr.io/jefferyhcool/bilinote:latest
+docker pull ghcr.io/kkCoca/bilinote:latest
 
 # 运行容器
 docker run -d -p 80:80 \
   -v bilinote-data:/app/backend/data \
   --name bilinote \
-  ghcr.io/jefferyhcool/bilinote:latest
+  ghcr.io/kkCoca/bilinote:latest
 ```
 
 访问：`http://localhost`
@@ -211,4 +211,4 @@ MIT License
 
 ## ⭐ Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=JefferyHcool/BiliNote&type=Date)](https://www.star-history.com/#JefferyHcool/BiliNote&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=kkCoca/BiliNote&type=Date)](https://www.star-history.com/#kkCoca/BiliNote&Date)
