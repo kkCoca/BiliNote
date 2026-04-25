@@ -18,6 +18,7 @@ from typing import Any, Optional
 
 import yt_dlp
 
+from app.downloaders.bilibili_downloader import _apply_bilibili_ydl_options
 from app.utils.logger import get_logger
 from app.utils.opencli_service import get_bilibili_space_videos
 
@@ -84,7 +85,13 @@ class UrlDetector:
             ]
 
             url_type = 'multi' if len(entries) > 1 else 'single'
-            return {'type': url_type, 'entries': entries}
+            return {
+                'type': url_type,
+                'title': f'B站用户 {uid} 的视频合集',
+                'source_url': url,
+                'cover_url': entries[0].get('thumbnail', '') if entries else '',
+                'entries': entries,
+            }
 
         opts: dict[str, Any] = {
             'quiet': True,
@@ -94,13 +101,7 @@ class UrlDetector:
         }
 
         if 'bilibili.com' in (url or '').lower():
-            opts['http_headers'] = {
-                'User-Agent': (
-                    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
-                    '(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-                ),
-                'Referer': 'https://www.bilibili.com/',
-            }
+            _apply_bilibili_ydl_options(opts)
 
         try:
             with _without_proxy_env():
@@ -132,8 +133,17 @@ class UrlDetector:
                 }
             )
 
+        title = info.get('title', '') or ''
+        source_url = info.get('webpage_url') or info.get('original_url') or url
+        cover_url = info.get('thumbnail', '') or ''
         url_type = 'multi' if len(entries) > 1 else 'single'
-        return {'type': url_type, 'entries': entries}
+        return {
+            'type': url_type,
+            'title': title,
+            'source_url': source_url,
+            'cover_url': cover_url,
+            'entries': entries,
+        }
 
     @staticmethod
     def _extract_entry_info(entry: dict[str, Any], parent_url: str) -> Optional[dict[str, Any]]:

@@ -8,6 +8,7 @@ services:
     # Host Chrome extension connects to localhost:19825.
     ports:
       - "127.0.0.1:19825:19825"
+      - "127.0.0.1:19826:19826"
     restart: on-failure:3
 
   backend:

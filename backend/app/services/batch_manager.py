@@ -38,12 +38,23 @@ class BatchManager:
             os.path.join(self.output_dir, f'{task_id}_audio.json'),
             os.path.join(self.output_dir, f'{task_id}_transcript.json'),
             os.path.join(self.output_dir, f'{task_id}_markdown.md'),
+            os.path.join(self.output_dir, f'{task_id}_markdown.status.json'),
         ]
 
-    def create_batch(self, video_urls: list[str]) -> str:
+    def create_batch(
+        self,
+        video_urls: list[str],
+        *,
+        title: str = '',
+        source_url: str = '',
+        cover_url: str = '',
+    ) -> str:
         batch_id = str(uuid.uuid4())
         data: Dict[str, Any] = {
             'batch_id': batch_id,
+            'title': title,
+            'source_url': source_url,
+            'cover_url': cover_url,
             'total': len(video_urls),
             'completed': 0,
             'failed': 0,
@@ -108,7 +119,7 @@ class BatchManager:
                 summaries.append(self._summary_from_data(data))
             except Exception:
                 logger.warning(f'Failed to refresh batch file: {path}', exc_info=True)
-        summaries.sort(key=lambda item: item.get('updated_at', ''), reverse=True)
+        summaries.sort(key=lambda item: item.get('created_at', '') or item.get('updated_at', ''), reverse=True)
         return summaries
 
     def build_course_view(self, batch_id: str) -> Dict[str, Any]:

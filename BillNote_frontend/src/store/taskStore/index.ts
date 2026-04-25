@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { delete_task, generateNote } from '@/services/note.ts'
-import { deleteBatchTask, type BatchCourseSummary } from '@/services/batch.ts'
+import { deleteBatch, deleteBatchTask, type BatchCourseSummary } from '@/services/batch.ts'
 import { v4 as uuidv4 } from 'uuid'
 import toast from 'react-hot-toast'
 
@@ -85,7 +85,7 @@ interface TaskStore {
   addPendingTask: (taskId: string, platform: string, formData?: TaskFormData) => void
   updateTaskContent: (id: string, data: Partial<Omit<Task, 'id' | 'createdAt'>>) => void
   removeTask: (id: string) => Promise<void>
-  removeBatch: (batchId: string) => void
+  removeBatch: (batchId: string) => Promise<void>
   clearTasks: () => void
   setBatchCourses: (batchCourses: BatchCourseSummary[]) => void
   mergeBatchCourses: (batchCourses: BatchCourseSummary[]) => void
@@ -325,7 +325,13 @@ export const useTaskStore = create<TaskStore>()(
         }
       },
 
-      removeBatch: batchId =>
+      removeBatch: async batchId => {
+        const snapshot = {
+          tasks: get().tasks,
+          batchCourses: get().batchCourses,
+          currentTaskId: get().currentTaskId,
+        }
+
         set(state => ({
           tasks: state.tasks.filter(task => getTaskBatchId(task) !== batchId),
           batchCourses: state.batchCourses.filter(batchCourse => batchCourse.batch_id !== batchId),
@@ -334,7 +340,24 @@ export const useTaskStore = create<TaskStore>()(
           )
             ? null
             : state.currentTaskId,
-        })),
+        }))
+
+        try {
+          await deleteBatch(batchId)
+        } catch (error) {
+          const isAlreadyDeleted =
+            typeof error === 'object' &&
+            error !== null &&
+            'code' in error &&
+            (error as { code?: number }).code === 404
+
+          if (isAlreadyDeleted) return
+
+          set(snapshot)
+          toast.error(error instanceof Error ? error.message : '删除合集失败')
+          throw error
+        }
+      },
 
       clearTasks: () => set({ tasks: [], batchCourses: [], currentTaskId: null }),
 
@@ -406,6 +429,13 @@ export const useTaskStore = create<TaskStore>()(
     }),
     {
       name: 'task-storage',
+      version: 1,
+      migrate: persistedState => ({
+        ...(persistedState as TaskStore),
+        tasks: [],
+        batchCourses: [],
+        currentTaskId: null,
+      }),
     }
   )
 )

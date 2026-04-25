@@ -48,7 +48,10 @@ class TestUrlDetector(unittest.TestCase):
     @patch('yt_dlp.YoutubeDL')
     def test_bilibili_sets_headers_for_ytdlp(self, mock_ydl_class):
         _reset_app_modules()
-        from app.utils.url_detector import UrlDetector
+        import importlib
+
+        url_detector = importlib.import_module('app.utils.url_detector')
+        UrlDetector = url_detector.UrlDetector
 
         mock_ydl = MagicMock()
         mock_ydl.__enter__ = MagicMock(return_value=mock_ydl)
@@ -56,10 +59,14 @@ class TestUrlDetector(unittest.TestCase):
         mock_ydl_class.return_value = mock_ydl
         mock_ydl.extract_info.return_value = {'id': 'BV123', 'title': 'x', 'duration': 1, 'thumbnail': ''}
 
-        UrlDetector.detect('https://www.bilibili.com/video/BV123')
+        with patch.object(url_detector, '_apply_bilibili_ydl_options', wraps=url_detector._apply_bilibili_ydl_options) as mock_apply:
+            UrlDetector.detect('https://www.bilibili.com/video/BV123')
 
         opts = mock_ydl_class.call_args[0][0]
+        mock_apply.assert_called_once_with(opts)
         self.assertIn('http_headers', opts)
+        self.assertEqual(opts['http_headers']['Origin'], 'https://www.bilibili.com')
+        self.assertEqual(opts['http_headers']['Accept'], 'application/json, text/plain, */*')
         self.assertIn('User-Agent', opts['http_headers'])
         self.assertIn('Referer', opts['http_headers'])
 

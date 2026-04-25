@@ -162,6 +162,9 @@ const NoteForm = () => {
   const [detectingUrl, setDetectingUrl] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewEntries, setPreviewEntries] = useState<DetectedEntry[]>([])
+  const [previewTitle, setPreviewTitle] = useState('')
+  const [previewSourceUrl, setPreviewSourceUrl] = useState('')
+  const [previewCoverUrl, setPreviewCoverUrl] = useState('')
   const [selectedVideoUrls, setSelectedVideoUrls] = useState<Record<string, boolean>>({})
   const [pendingBatchPayload, setPendingBatchPayload] = useState<BatchPayload | null>(null)
   const [activeBatch, setActiveBatch] = useState<
@@ -295,12 +298,19 @@ const NoteForm = () => {
     grid_size: payload.grid_size,
   })
 
-  const openPreview = (entries: DetectedEntry[], payloadForBatch: BatchPayload) => {
+  const openPreview = (
+    entries: DetectedEntry[],
+    payloadForBatch: BatchPayload,
+    meta: { title?: string; source_url?: string; cover_url?: string } = {},
+  ) => {
     const selected: Record<string, boolean> = {}
     for (const e of entries) {
       if (e.video_url) selected[e.video_url] = true
     }
     setPreviewEntries(entries)
+    setPreviewTitle(meta.title || '')
+    setPreviewSourceUrl(meta.source_url || '')
+    setPreviewCoverUrl(meta.cover_url || '')
     setSelectedVideoUrls(selected)
     setPendingBatchPayload(payloadForBatch)
     setPreviewOpen(true)
@@ -320,10 +330,20 @@ const NoteForm = () => {
       return
     }
 
+    const selectedEntries = urls
+      .map(url => previewEntries.find(entry => entry.video_url === url))
+      .filter((entry): entry is DetectedEntry => Boolean(entry))
+    const batchTitle = previewTitle || '批量课程'
+    const batchSourceUrl = previewSourceUrl || pendingBatchPayload?.video_url || urls[0] || ''
+    const batchCoverUrl = previewCoverUrl || selectedEntries[0]?.thumbnail || ''
+
     try {
       setDetectingUrl(true)
       const res = await generateBatchNote({
         video_urls: urls,
+        title: batchTitle,
+        source_url: batchSourceUrl,
+        cover_url: batchCoverUrl,
         platform: payload.platform,
         quality: payload.quality,
         model_name: payload.model_name,
@@ -350,14 +370,13 @@ const NoteForm = () => {
         addPendingTask(it.task_id, payload.platform, toTaskFormData(payload, it.video_url, res.batch_id))
       }
 
-      const selectedEntryByUrl = new Map(previewEntries.map(e => [e.video_url, e]))
       const now = new Date().toISOString()
       upsertBatchCourse(
         toBatchCourseSummary({
           batch_id: res.batch_id,
-          title: selectedEntryByUrl.get(urls[0])?.title || '批量课程',
-          source_url: urls[0] || '',
-          cover_url: selectedEntryByUrl.get(urls[0])?.thumbnail || '',
+          title: batchTitle,
+          source_url: batchSourceUrl,
+          cover_url: batchCoverUrl,
           total: items.length,
           completed: 0,
           failed: 0,
@@ -381,6 +400,9 @@ const NoteForm = () => {
 
       setActiveBatch({ batchId: res.batch_id, items })
       setPreviewOpen(false)
+      setPreviewTitle('')
+      setPreviewSourceUrl('')
+      setPreviewCoverUrl('')
       toast.success(`已提交批量任务：${items.length} 个`)
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, '批量提交失败'))
@@ -422,7 +444,7 @@ const NoteForm = () => {
           const detected = await detectUrl(values.video_url || '')
           const n = detected?.entries?.length || 0
           if (n > 1) {
-            openPreview(detected.entries, payload)
+            openPreview(detected.entries, payload, detected)
             return
           }
           toast.error('未解析到视频列表，请稍后重试')
@@ -829,7 +851,7 @@ const NoteForm = () => {
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>视频列表预览（共 {previewEntries.length} 条）</DialogTitle>
+            <DialogTitle>{previewTitle || '视频列表预览'}（共 {previewEntries.length} 条）</DialogTitle>
             <DialogDescription>
               勾选要生成笔记的视频，然后点击“批量生成”。已选 {selectedCount} 条。
             </DialogDescription>

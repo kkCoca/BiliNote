@@ -66,6 +66,7 @@ const NoteHistory: FC<NoteHistoryProps> = ({ onSelect, selectedId }) => {
   const tasks = useTaskStore(state => state.tasks)
   const batchCourses = useTaskStore(state => state.batchCourses)
   const removeTask = useTaskStore(state => state.removeTask)
+  const removeBatch = useTaskStore(state => state.removeBatch)
   // 确保baseURL没有尾部斜杠
   const baseURL = (String(import.meta.env.VITE_API_BASE_URL || 'api')).replace(/\/$/, '')
   const [search, setSearch] = useState('')
@@ -164,6 +165,11 @@ const NoteHistory: FC<NoteHistoryProps> = ({ onSelect, selectedId }) => {
       }
       return next
     })
+  }
+
+  const handleRemoveBatch = async (batchId: string) => {
+    if (!window.confirm('确定删除整个视频合集及其子笔记吗？')) return
+    await removeBatch(batchId)
   }
 
   const renderTaskCover = (task: Task) => {
@@ -306,6 +312,7 @@ const NoteHistory: FC<NoteHistoryProps> = ({ onSelect, selectedId }) => {
                 <span className="rounded bg-red-500 px-1.5 py-0.5 text-white">失败 {item.failed}</span>
               )}
             </div>
+            <div>{renderDeleteButton('删除合集', () => handleRemoveBatch(item.batchId))}</div>
           </div>
         </div>
 

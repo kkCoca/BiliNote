@@ -216,6 +216,107 @@ class TestBatchRoutes(unittest.TestCase):
             else:
                 os.environ['NOTE_OUTPUT_DIR'] = original_note_output_dir
             _reset_app_modules()
+    def test_delete_batch_route_deletes_terminal_batch(self):
+        original_database_url = os.environ.get('DATABASE_URL')
+        original_note_output_dir = os.environ.get('NOTE_OUTPUT_DIR')
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                db_path = os.path.join(td, 'test.db')
+                os.environ['DATABASE_URL'] = f'sqlite:///{db_path}'
+                os.environ['NOTE_OUTPUT_DIR'] = td
+                _reset_app_modules()
+
+                from app.db.engine import Base, SessionLocal, engine
+                from app.db.models.video_tasks import VideoTask
+                from app.services.batch_manager import BatchManager
+
+                Base.metadata.create_all(bind=engine)
+                db = SessionLocal()
+                db.add(VideoTask(video_id='video-1', platform='bilibili', task_id='task-1'))
+                db.add(VideoTask(video_id='video-2', platform='bilibili', task_id='task-2'))
+                db.commit()
+                db.close()
+
+                mgr = BatchManager()
+                batch_id = mgr.create_batch(['https://example.com/course/1', 'https://example.com/course/2'])
+                mgr.register_task(batch_id, 'task-1', 'https://example.com/course/1')
+                mgr.register_task(batch_id, 'task-2', 'https://example.com/course/2')
+                for task_id, status in (('task-1', 'SUCCESS'), ('task-2', 'FAILED')):
+                    with open(f'{td}/{task_id}.status.json', 'w', encoding='utf-8') as f:
+                        json.dump({'status': status, 'message': ''}, f)
+                    with open(f'{td}/{task_id}.json', 'w', encoding='utf-8') as f:
+                        json.dump({'markdown': '', 'audio_meta': {}}, f)
+
+                c = self._client()
+                r = c.delete(f'/api/delete_batch/{batch_id}')
+
+                self.assertEqual(r.status_code, 200)
+                body = r.json()
+                self.assertEqual(body['code'], 0)
+                self.assertEqual(body['data']['batch_id'], batch_id)
+                self.assertEqual(body['data']['deleted_task_ids'], ['task-1', 'task-2'])
+                self.assertFalse(os.path.exists(f'{td}/batch_{batch_id}.json'))
+                self.assertFalse(os.path.exists(f'{td}/task-1.json'))
+                self.assertFalse(os.path.exists(f'{td}/task-2.json'))
+        finally:
+            if original_database_url is None:
+                os.environ.pop('DATABASE_URL', None)
+            else:
+                os.environ['DATABASE_URL'] = original_database_url
+            if original_note_output_dir is None:
+                os.environ.pop('NOTE_OUTPUT_DIR', None)
+            else:
+                os.environ['NOTE_OUTPUT_DIR'] = original_note_output_dir
+            _reset_app_modules()
+
+    def test_delete_batch_route_refuses_running_batch(self):
+        original_note_output_dir = os.environ.get('NOTE_OUTPUT_DIR')
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                os.environ['NOTE_OUTPUT_DIR'] = td
+                _reset_app_modules()
+
+                from app.services.batch_manager import BatchManager
+
+                mgr = BatchManager()
+                batch_id = mgr.create_batch(['https://example.com/course/1'])
+                mgr.register_task(batch_id, 'task-1', 'https://example.com/course/1')
+                with open(f'{td}/task-1.status.json', 'w', encoding='utf-8') as f:
+                    json.dump({'status': 'PENDING', 'message': ''}, f)
+
+                c = self._client()
+                r = c.delete(f'/api/delete_batch/{batch_id}')
+
+                self.assertEqual(r.status_code, 200)
+                body = r.json()
+                self.assertEqual(body['code'], 400)
+                self.assertIn('合集仍有任务进行中', body['msg'])
+                self.assertTrue(os.path.exists(f'{td}/batch_{batch_id}.json'))
+        finally:
+            if original_note_output_dir is None:
+                os.environ.pop('NOTE_OUTPUT_DIR', None)
+            else:
+                os.environ['NOTE_OUTPUT_DIR'] = original_note_output_dir
+            _reset_app_modules()
+
+    def test_delete_batch_route_returns_batch_not_found(self):
+        original_note_output_dir = os.environ.get('NOTE_OUTPUT_DIR')
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                os.environ['NOTE_OUTPUT_DIR'] = td
+                c = self._client()
+
+                r = c.delete('/api/delete_batch/missing-batch')
+                self.assertEqual(r.status_code, 200)
+                body = r.json()
+                self.assertEqual(body['code'], 404)
+                self.assertEqual(body['msg'], 'batch not found')
+        finally:
+            if original_note_output_dir is None:
+                os.environ.pop('NOTE_OUTPUT_DIR', None)
+            else:
+                os.environ['NOTE_OUTPUT_DIR'] = original_note_output_dir
+            _reset_app_modules()
 
 
 if __name__ == '__main__':

@@ -10,6 +10,7 @@ import yt_dlp
 from app.downloaders.base import Downloader, DownloadQuality, QUALITY_MAP
 from app.models.notes_model import AudioDownloadResult
 from app.models.transcriber_model import TranscriptResult, TranscriptSegment
+from app.services.cookie_manager import CookieConfigManager
 from app.utils.path_helper import get_data_dir
 from app.utils.url_parser import extract_video_id
 
@@ -17,6 +18,44 @@ logger = logging.getLogger(__name__)
 
 # B站 cookies 文件路径
 BILIBILI_COOKIES_FILE = os.getenv("BILIBILI_COOKIES_FILE", "cookies.txt")
+BILIBILI_HTTP_HEADERS = {
+    'User-Agent': (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/124.0.0.0 Safari/537.36'
+    ),
+    'Referer': 'https://www.bilibili.com/',
+    'Origin': 'https://www.bilibili.com',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'Sec-Fetch-Site': 'same-site',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Dest': 'empty',
+}
+
+
+def _bilibili_cookies_path() -> Path:
+    cookies_path = Path(BILIBILI_COOKIES_FILE)
+    if not cookies_path.is_absolute():
+        cookies_path = Path(__file__).parent.parent.parent / BILIBILI_COOKIES_FILE
+    return cookies_path
+
+
+def _apply_bilibili_ydl_options(ydl_opts: dict) -> None:
+    ydl_opts['http_headers'] = {**BILIBILI_HTTP_HEADERS, **ydl_opts.get('http_headers', {})}
+
+    cookie = (CookieConfigManager().get('bilibili') or '').strip()
+    if cookie:
+        ydl_opts['http_headers']['Cookie'] = cookie
+        logger.info('使用已配置的B站 cookies')
+        return
+
+    cookies_path = _bilibili_cookies_path()
+    if cookies_path.exists():
+        ydl_opts['cookiefile'] = str(cookies_path)
+        logger.info(f"使用 cookies 文件: {cookies_path}")
+    else:
+        logger.warning(f"B站 cookies 文件不存在: {cookies_path}，下载可能失败")
 
 
 class BilibiliDownloader(Downloader, ABC):
@@ -51,6 +90,7 @@ class BilibiliDownloader(Downloader, ABC):
             'noplaylist': True,
             'quiet': False,
         }
+        _apply_bilibili_ydl_options(ydl_opts)
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
@@ -101,6 +141,7 @@ class BilibiliDownloader(Downloader, ABC):
             'quiet': False,
             'merge_output_format': 'mp4',  # 确保合并成 mp4
         }
+        _apply_bilibili_ydl_options(ydl_opts)
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
@@ -153,17 +194,7 @@ class BilibiliDownloader(Downloader, ABC):
             'quiet': True,
         }
 
-        # 添加 cookies 支持
-        cookies_path = Path(BILIBILI_COOKIES_FILE)
-        if not cookies_path.is_absolute():
-            # 相对于 backend 目录
-            cookies_path = Path(__file__).parent.parent.parent / BILIBILI_COOKIES_FILE
-
-        if cookies_path.exists():
-            ydl_opts['cookiefile'] = str(cookies_path)
-            logger.info(f"使用 cookies 文件: {cookies_path}")
-        else:
-            logger.warning(f"B站 cookies 文件不存在: {cookies_path}，字幕获取可能失败")
+        _apply_bilibili_ydl_options(ydl_opts)
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:

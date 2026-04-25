@@ -34,6 +34,9 @@ class BatchGenerateRequest(BaseModel):
     quality: DownloadQuality
     model_name: str
     provider_id: str
+    title: Optional[str] = None
+    source_url: Optional[str] = None
+    cover_url: Optional[str] = None
     screenshot: Optional[bool] = False
     link: Optional[bool] = False
     format: Optional[list] = []
@@ -64,7 +67,12 @@ def generate_batch_note(data: BatchGenerateRequest, background_tasks: Background
         raise HTTPException(status_code=400, detail='video_urls is empty')
 
     mgr = BatchManager()
-    batch_id = mgr.create_batch(data.video_urls)
+    batch_id = mgr.create_batch(
+        data.video_urls,
+        title=data.title or '',
+        source_url=data.source_url or data.video_urls[0],
+        cover_url=data.cover_url or '',
+    )
     task_map: list[dict] = []
 
     # Schedule each task independently in the shared executor.
@@ -125,6 +133,17 @@ def delete_batch_task(data: DeleteBatchTaskRequest):
         missing_id = e.args[0] if e.args else str(e)
         message = 'batch not found' if missing_id == data.batch_id else 'task not found'
         return R.error(msg=message, code=404)
+    except ValueError as e:
+        return R.error(msg=str(e), code=400)
+
+
+@router.delete('/delete_batch/{batch_id}')
+def delete_batch(batch_id: str):
+    try:
+        mgr = BatchManager()
+        return R.success(data=mgr.delete_batch(batch_id), msg='删除成功')
+    except FileNotFoundError:
+        return R.error(msg='batch not found', code=404)
     except ValueError as e:
         return R.error(msg=str(e), code=400)
 

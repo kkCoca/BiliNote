@@ -1,4 +1,4 @@
-import request from '@/utils/request'
+import request, { type IResponse } from '@/utils/request'
 import toast from 'react-hot-toast'
 
 export interface DetectedEntry {
@@ -11,6 +11,9 @@ export interface DetectedEntry {
 
 export interface DetectUrlResponse {
   type: 'single' | 'multi'
+  title?: string
+  source_url?: string
+  cover_url?: string
   entries: DetectedEntry[]
 }
 
@@ -27,6 +30,9 @@ export interface GenerateBatchRequest {
   provider_id: string
   format: string[]
   style: string
+  title?: string
+  source_url?: string
+  cover_url?: string
   extras?: string
   screenshot?: boolean
   link?: boolean
@@ -124,6 +130,11 @@ export interface DeleteBatchTaskResponse extends RawBatchStatusResponse {
   remaining_task_ids: string[]
 }
 
+export interface DeleteBatchResponse {
+  batch_id: string
+  deleted_task_ids: string[]
+}
+
 export const generateBatchNote = async (data: GenerateBatchRequest): Promise<GenerateBatchResponse> => {
   return await request.post('/generate_batch_note', data, { timeout: 120000 })
 }
@@ -149,6 +160,25 @@ export const deleteBatchTask = async (
     return res
   } catch (e) {
     console.error('删除批量任务失败:', e)
+    throw e
+  }
+}
+
+export const deleteBatch = async (batchId: string): Promise<DeleteBatchResponse> => {
+  try {
+    const res: DeleteBatchResponse = await request.delete(`/delete_batch/${batchId}`, {
+      suppressErrorToast: true,
+    })
+    toast.success('合集已成功删除')
+    return res
+  } catch (e) {
+    const response = e as IResponse | undefined
+    if (response?.code === 404) {
+      return { batch_id: batchId, deleted_task_ids: [] }
+    }
+
+    console.error('删除视频合集失败:', e)
+    toast.error(response?.msg || '删除合集失败')
     throw e
   }
 }

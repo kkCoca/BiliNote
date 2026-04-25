@@ -293,7 +293,7 @@ class TestBatchManager(unittest.TestCase):
                 }
                 with open(f'{td}/batch_{batch_id}.json', 'w', encoding='utf-8') as f:
                     json.dump(data, f)
-                for suffix in ('.json', '.status.json', '_audio.json', '_transcript.json', '_markdown.md'):
+                for suffix in ('.json', '.status.json', '_audio.json', '_transcript.json', '_markdown.md', '_markdown.status.json'):
                     with open(f'{td}/t1{suffix}', 'w', encoding='utf-8') as f:
                         f.write('t1')
                     with open(f'{td}/t2{suffix}', 'w', encoding='utf-8') as f:
@@ -306,7 +306,7 @@ class TestBatchManager(unittest.TestCase):
                 self.assertEqual(result['total'], 1)
                 self.assertEqual(result['completed'], 1)
                 self.assertEqual(result['failed'], 0)
-                for suffix in ('.json', '.status.json', '_audio.json', '_transcript.json', '_markdown.md'):
+                for suffix in ('.json', '.status.json', '_audio.json', '_transcript.json', '_markdown.md', '_markdown.status.json'):
                     self.assertFalse(os.path.exists(f'{td}/t1{suffix}'))
                     self.assertTrue(os.path.exists(f'{td}/t2{suffix}'))
 
@@ -324,6 +324,108 @@ class TestBatchManager(unittest.TestCase):
             else:
                 os.environ['NOTE_OUTPUT_DIR'] = original_note_output_dir
             _reset_app_modules()
+    def test_delete_batch_removes_terminal_batch_and_artifacts(self):
+        original_database_url = os.environ.get('DATABASE_URL')
+        original_note_output_dir = os.environ.get('NOTE_OUTPUT_DIR')
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                db_path = os.path.join(td, 'test.db')
+                os.environ['DATABASE_URL'] = f'sqlite:///{db_path}'
+                os.environ['NOTE_OUTPUT_DIR'] = td
+                _reset_app_modules()
+
+                from app.db.engine import Base, SessionLocal, engine
+                from app.db.models.video_tasks import VideoTask
+                from app.services.batch_manager import BatchManager
+
+                Base.metadata.create_all(bind=engine)
+                db = SessionLocal()
+                db.add(VideoTask(video_id='v1', platform='bilibili', task_id='t1'))
+                db.add(VideoTask(video_id='v2', platform='bilibili', task_id='t2'))
+                db.commit()
+                db.close()
+
+                batch_id = 'batch-delete-all'
+                data = {
+                    'batch_id': batch_id,
+                    'total': 2,
+                    'completed': 1,
+                    'failed': 1,
+                    'tasks': {
+                        't1': {'video_id': 'v1', 'video_url': 'u1', 'status': 'SUCCESS', 'order': 0},
+                        't2': {'video_id': 'v2', 'video_url': 'u2', 'status': 'FAILED', 'order': 1},
+                    },
+                    'created_at': '2026-04-25T00:00:00+00:00',
+                    'updated_at': '2026-04-25T00:01:00+00:00',
+                }
+                with open(f'{td}/batch_{batch_id}.json', 'w', encoding='utf-8') as f:
+                    json.dump(data, f)
+                for task_id, status in (('t1', 'SUCCESS'), ('t2', 'FAILED')):
+                    with open(f'{td}/{task_id}.status.json', 'w', encoding='utf-8') as f:
+                        json.dump({'status': status, 'message': ''}, f)
+                    for suffix in ('.json', '_audio.json', '_transcript.json', '_markdown.md'):
+                        with open(f'{td}/{task_id}{suffix}', 'w', encoding='utf-8') as f:
+                            f.write(task_id)
+
+                result = BatchManager(output_dir=td).delete_batch(batch_id)
+
+                self.assertEqual(result['batch_id'], batch_id)
+                self.assertEqual(result['deleted_task_ids'], ['t1', 't2'])
+                self.assertFalse(os.path.exists(f'{td}/batch_{batch_id}.json'))
+                for task_id in ('t1', 't2'):
+                    for suffix in ('.json', '.status.json', '_audio.json', '_transcript.json', '_markdown.md', '_markdown.status.json'):
+                        self.assertFalse(os.path.exists(f'{td}/{task_id}{suffix}'))
+
+                db = SessionLocal()
+                self.assertIsNone(db.query(VideoTask).filter_by(task_id='t1').first())
+                self.assertIsNone(db.query(VideoTask).filter_by(task_id='t2').first())
+                db.close()
+        finally:
+            if original_database_url is None:
+                os.environ.pop('DATABASE_URL', None)
+            else:
+                os.environ['DATABASE_URL'] = original_database_url
+            if original_note_output_dir is None:
+                os.environ.pop('NOTE_OUTPUT_DIR', None)
+            else:
+                os.environ['NOTE_OUTPUT_DIR'] = original_note_output_dir
+            _reset_app_modules()
+
+    def test_delete_batch_rejects_running_batch(self):
+        _reset_app_modules()
+        from app.services.batch_manager import BatchManager
+
+        with tempfile.TemporaryDirectory() as td:
+            batch_id = 'batch-running'
+            data = {
+                'batch_id': batch_id,
+                'total': 1,
+                'completed': 0,
+                'failed': 0,
+                'tasks': {
+                    't1': {'video_id': 'v1', 'video_url': 'u1', 'status': 'PENDING'},
+                },
+                'created_at': '2026-04-25T00:00:00+00:00',
+                'updated_at': '2026-04-25T00:01:00+00:00',
+            }
+            with open(f'{td}/batch_{batch_id}.json', 'w', encoding='utf-8') as f:
+                json.dump(data, f)
+            with open(f'{td}/t1.status.json', 'w', encoding='utf-8') as f:
+                json.dump({'status': 'PENDING', 'message': ''}, f)
+
+            with self.assertRaisesRegex(ValueError, '合集仍有任务进行中'):
+                BatchManager(output_dir=td).delete_batch(batch_id)
+
+            self.assertTrue(os.path.exists(f'{td}/batch_{batch_id}.json'))
+            self.assertTrue(os.path.exists(f'{td}/t1.status.json'))
+
+    def test_delete_batch_missing_batch_raises_file_not_found(self):
+        _reset_app_modules()
+        from app.services.batch_manager import BatchManager
+
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(FileNotFoundError):
+                BatchManager(output_dir=td).delete_batch('missing')
 
 
 if __name__ == '__main__':
