@@ -1,4 +1,11 @@
-# Logs
+# Local runtime artifacts and Claude workspaces
+.worktrees/
+skills/
+config/
+/bili_note.db
+/backend/app/db/bili_note.db
+/backend/note_results.backup-*/
+
 logs
 *.log
 npm-debug.log*
