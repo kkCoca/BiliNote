@@ -1,28 +1,44 @@
 import request from '@/utils/request'
 import toast from 'react-hot-toast'
+import type { AudioMeta, Markdown, TaskStatus, Transcript } from '@/store/taskStore'
 
-export const generateNote = async (data: {
+export interface GenerateNoteRequest {
   video_url: string
   platform: string
   quality: string
   model_name: string
   provider_id: string
   task_id?: string
-  format: Array<string>
-  style: string
+  format?: string[]
+  style?: string
   extras?: string
+  video_understanding?: boolean
   video_understand?: boolean
   video_interval?: number
-  grid_size: Array<number>
-}) => {
+  grid_size?: number[]
+}
+
+export interface GenerateNoteResponse {
+  task_id: string
+}
+
+export interface TaskStatusResponse {
+  status: TaskStatus
+  result?: {
+    markdown: string | Markdown[]
+    transcript: Transcript
+    audio_meta: AudioMeta
+  }
+  message?: string
+  task_id: string
+}
+
+export const generateNote = async (data: GenerateNoteRequest): Promise<GenerateNoteResponse | null> => {
   try {
     console.log('generateNote', data)
-    const response = await request.post('/generate_note', data)
+    const response: GenerateNoteResponse = await request.post('/generate_note', data)
 
     if (!response) {
-      if (response.data.msg) {
-        toast.error(response.data.msg)
-      }
       return null
     }
     toast.success('笔记生成任务已提交！')
@@ -41,7 +57,7 @@ export const generateNote = async (data: {
   }
 }
 
-export const delete_task = async ({ video_id, platform }) => {
+export const delete_task = async ({ video_id, platform }: { video_id: string; platform?: string }) => {
   try {
     const data = {
       video_id,
@@ -59,7 +75,7 @@ export const delete_task = async ({ video_id, platform }) => {
   }
 }
 
-export const get_task_status = async (task_id: string) => {
+export const get_task_status = async (task_id: string): Promise<TaskStatusResponse> => {
   try {
     // 成功提示
 

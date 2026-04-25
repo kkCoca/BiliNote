@@ -44,6 +44,11 @@ class BatchGenerateRequest(BaseModel):
     grid_size: Optional[list] = []
 
 
+class DeleteBatchTaskRequest(BaseModel):
+    batch_id: str
+    task_id: str
+
+
 @router.post('/detect_url')
 def detect_url(data: DetectUrlRequest):
     try:
@@ -91,6 +96,37 @@ def generate_batch_note(data: BatchGenerateRequest, background_tasks: Background
         )
 
     return R.success(data={'batch_id': batch_id, 'task_map': task_map})
+
+
+@router.get('/batch_courses')
+def batch_courses():
+    mgr = BatchManager()
+    return R.success(data=mgr.list_batches())
+
+
+@router.post('/delete_batch_task')
+def delete_batch_task(data: DeleteBatchTaskRequest):
+    try:
+        mgr = BatchManager()
+        result = mgr.delete_task_from_batch(data.batch_id, data.task_id)
+        ordered_task_ids = sorted(
+            result.get('tasks', {}).keys(),
+            key=lambda task_id: (result['tasks'][task_id].get('order', 0), task_id),
+        )
+        return R.success(
+            data={
+                **result,
+                'deleted_task_id': data.task_id,
+                'remaining_task_ids': ordered_task_ids,
+            },
+            msg='删除成功',
+        )
+    except FileNotFoundError as e:
+        missing_id = e.args[0] if e.args else str(e)
+        message = 'batch not found' if missing_id == data.batch_id else 'task not found'
+        return R.error(msg=message, code=404)
+    except ValueError as e:
+        return R.error(msg=str(e), code=400)
 
 
 @router.get('/batch_status/{batch_id}')

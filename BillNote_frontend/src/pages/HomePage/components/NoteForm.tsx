@@ -8,16 +8,16 @@ import {
   FormMessage,
 } from '@/components/ui/form.tsx'
 import { useEffect, useState } from 'react'
-import { useForm, useWatch, type FieldErrors } from 'react-hook-form'
+import { useForm, useWatch, type FieldErrors, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 
 import { Info, Loader2, Plus } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert.tsx'
 import { generateNote } from '@/services/note.ts'
-import { detectUrl, generateBatchNote, type DetectedEntry } from '@/services/batch.ts'
+import { detectUrl, generateBatchNote, getBatchStatus, toBatchCourseSummary, type DetectedEntry } from '@/services/batch.ts'
 import { uploadFile } from '@/services/upload.ts'
-import { useTaskStore } from '@/store/taskStore'
+import { useTaskStore, type TaskFormData } from '@/store/taskStore'
 import { useModelStore } from '@/store/modelStore'
 import toast from 'react-hot-toast'
 import {
@@ -172,13 +172,13 @@ const NoteForm = () => {
       }
   >(null)
   /* ---- 全局状态 ---- */
-  const { addPendingTask, currentTaskId, setCurrentTask, getCurrentTask, retryTask } =
+  const { addPendingTask, currentTaskId, setCurrentTask, getCurrentTask, retryTask, upsertBatchCourse } =
     useTaskStore()
   const { loadEnabledModels, modelList } = useModelStore()
 
   /* ---- 表单 ---- */
   const form = useForm<NoteFormValues>({
-    resolver: zodResolver(formSchema),
+    resolver: zodResolver(formSchema) as Resolver<NoteFormValues>,
     defaultValues: {
       platform: 'bilibili',
       quality: 'medium',
@@ -233,13 +233,17 @@ const NoteForm = () => {
       video_url: formData.video_url || '',
       model_name: formData.model_name || modelList[0]?.model_name || '',
       style: formData.style || 'minimal',
-      quality: formData.quality || 'medium',
+      quality: formData.quality === 'fast' || formData.quality === 'medium' || formData.quality === 'slow'
+        ? formData.quality
+        : 'medium',
       extras: formData.extras || '',
       screenshot: formData.screenshot ?? false,
       link: formData.link ?? false,
       video_understanding: formData.video_understanding ?? false,
       video_interval: formData.video_interval ?? 6,
-      grid_size: formData.grid_size ?? [2, 2],
+      grid_size: Array.isArray(formData.grid_size) && formData.grid_size.length >= 2
+        ? [formData.grid_size[0], formData.grid_size[1]]
+        : [2, 2],
       format: formData.format ?? [],
     })
   }, [
@@ -273,6 +277,23 @@ const NoteForm = () => {
       setIsUploading(false)
     }
   }
+
+  const toTaskFormData = (payload: BatchPayload, videoUrl = payload.video_url || '', batchId?: string): TaskFormData => ({
+    video_url: videoUrl,
+    link: payload.link,
+    screenshot: payload.screenshot,
+    platform: payload.platform,
+    quality: payload.quality,
+    model_name: payload.model_name,
+    provider_id: payload.provider_id,
+    style: payload.style,
+    batchId,
+    format: payload.format,
+    extras: payload.extras,
+    video_understanding: payload.video_understanding,
+    video_interval: payload.video_interval,
+    grid_size: payload.grid_size,
+  })
 
   const openPreview = (entries: DetectedEntry[], payloadForBatch: BatchPayload) => {
     const selected: Record<string, boolean> = {}
@@ -326,8 +347,37 @@ const NoteForm = () => {
       }))
 
       for (const it of items) {
-        addPendingTask(it.task_id, payload.platform, { ...payload, video_url: it.video_url })
+        addPendingTask(it.task_id, payload.platform, toTaskFormData(payload, it.video_url, res.batch_id))
       }
+
+      const selectedEntryByUrl = new Map(previewEntries.map(e => [e.video_url, e]))
+      const now = new Date().toISOString()
+      upsertBatchCourse(
+        toBatchCourseSummary({
+          batch_id: res.batch_id,
+          title: selectedEntryByUrl.get(urls[0])?.title || '批量课程',
+          source_url: urls[0] || '',
+          cover_url: selectedEntryByUrl.get(urls[0])?.thumbnail || '',
+          total: items.length,
+          completed: 0,
+          failed: 0,
+          tasks: Object.fromEntries(
+            items.map((item, order) => [
+              item.task_id,
+              { video_url: item.video_url, status: 'PENDING', order },
+            ])
+          ),
+          entries: urls.map((video_url, order) => ({ video_url, order })),
+          created_at: now,
+          updated_at: now,
+        })
+      )
+
+      getBatchStatus(res.batch_id)
+        .then(rawStatus => upsertBatchCourse(toBatchCourseSummary(rawStatus)))
+        .catch(error => {
+          console.error('刷新批量课程摘要失败：', error)
+        })
 
       setActiveBatch({ batchId: res.batch_id, items })
       setPreviewOpen(false)
@@ -360,7 +410,7 @@ const NoteForm = () => {
       return
     }
     if (currentTaskId) {
-      retryTask(currentTaskId, payload)
+      retryTask(currentTaskId, toTaskFormData(payload))
       return
     }
 
@@ -401,8 +451,15 @@ const NoteForm = () => {
       }
     }
 
-    const data = await generateNote(payload)
-    addPendingTask(data.task_id, values.platform, payload)
+    const data = await generateNote({
+      ...payload,
+      video_url: payload.video_url || '',
+      format: payload.format || [],
+      style: payload.style || '',
+      grid_size: payload.grid_size || [2, 2],
+    })
+    if (!data) return
+    addPendingTask(data.task_id, values.platform, toTaskFormData(payload))
   }
   const onInvalid = (errors: FieldErrors<NoteFormValues>) => {
     console.warn('表单校验失败：', errors)
@@ -595,7 +652,6 @@ const NoteForm = () => {
             {
 
              modelList.length>0?(     <FormField
-               className="w-full"
                control={form.control}
                name="model_name"
                render={({ field }) => (
@@ -638,7 +694,6 @@ const NoteForm = () => {
 
             {/* 笔记风格 */}
             <FormField
-              className="w-full"
               control={form.control}
               name="style"
               render={({ field }) => (
@@ -678,8 +733,8 @@ const NoteForm = () => {
                   <div className="flex items-center gap-2">
                     <FormLabel>启用</FormLabel>
                     <Checkbox
-                      checked={videoUnderstandingEnabled}
-                      onCheckedChange={v => form.setValue('video_understanding', v)}
+                      checked={!!videoUnderstandingEnabled}
+                      onCheckedChange={v => form.setValue('video_understanding', v === true)}
                     />
                   </div>
                   <FormMessage />

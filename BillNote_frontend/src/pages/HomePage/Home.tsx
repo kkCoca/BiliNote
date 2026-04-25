@@ -3,17 +3,35 @@ import HomeLayout from '@/layouts/HomeLayout.tsx'
 import NoteForm from '@/pages/HomePage/components/NoteForm.tsx'
 import MarkdownViewer from '@/pages/HomePage/components/MarkdownViewer.tsx'
 import { useTaskStore } from '@/store/taskStore'
+import { listBatchCourses } from '@/services/batch.ts'
 import History from '@/pages/HomePage/components/History.tsx'
 type ViewStatus = 'idle' | 'loading' | 'success' | 'failed'
 export const HomePage: FC = () => {
   const tasks = useTaskStore(state => state.tasks)
   const currentTaskId = useTaskStore(state => state.currentTaskId)
+  const mergeBatchCourses = useTaskStore(state => state.mergeBatchCourses)
 
   const currentTask = tasks.find(t => t.id === currentTaskId)
 
   const [status, setStatus] = useState<ViewStatus>('idle')
 
   const content = currentTask?.markdown || ''
+
+  useEffect(() => {
+    let ignore = false
+
+    listBatchCourses()
+      .then(batchCourses => {
+        if (!ignore) mergeBatchCourses(batchCourses)
+      })
+      .catch(error => {
+        console.error('加载批量课程历史失败：', error)
+      })
+
+    return () => {
+      ignore = true
+    }
+  }, [mergeBatchCourses])
 
   useEffect(() => {
     if (!currentTask) {
@@ -37,7 +55,7 @@ export const HomePage: FC = () => {
   return (
     <HomeLayout
       NoteForm={<NoteForm />}
-      Preview={<MarkdownViewer status={status} />}
+      Preview={<MarkdownViewer content={content} status={status} />}
       History={<History />}
     />
   )
