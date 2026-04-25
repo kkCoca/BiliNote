@@ -11,6 +11,8 @@ class TranscriberType(str, Enum):
     BCUT = "bcut"
     KUAISHOU = "kuaishou"
     GROQ = "groq"
+    QWEN = "qwen"
+    QWEN_ASR = "qwen-asr"
 
 # 在 Apple 平台尝试导入 MLX Whisper（不再依赖环境变量，支持前端动态切换）
 MLX_WHISPER_AVAILABLE = False
@@ -31,6 +33,8 @@ _transcribers = {
     TranscriberType.BCUT: None,
     TranscriberType.KUAISHOU: None,
     TranscriberType.GROQ: None,
+    TranscriberType.QWEN: None,
+    TranscriberType.QWEN_ASR: None,
 }
 
 # 公共实例初始化函数（延迟导入）
@@ -51,6 +55,10 @@ def _init_transcriber(key: TranscriberType, module_name: str, class_name: str, *
 # 各类型获取方法（使用延迟导入）
 def get_groq_transcriber():
     return _init_transcriber(TranscriberType.GROQ, 'groq', 'GroqTranscriber')
+
+
+def get_qwen_asr_transcriber():
+    return _init_transcriber(TranscriberType.QWEN, 'qwen_asr', 'QwenASRTranscriber')
 
 
 def get_whisper_transcriber(model_size="base", device="cuda"):
@@ -88,7 +96,7 @@ def get_transcriber(transcriber_type="fast-whisper", model_size="base", device="
     获取指定类型的转录器实例
 
     参数:
-        transcriber_type: 支持 "fast-whisper", "mlx-whisper", "bcut", "kuaishou", "groq"
+        transcriber_type: 支持 "fast-whisper", "mlx-whisper", "bcut", "kuaishou", "groq", "qwen"
         model_size: 模型大小，适用于 whisper 类
         device: 设备类型（如 cuda / cpu），仅 whisper 使用
 
@@ -124,6 +132,9 @@ def get_transcriber(transcriber_type="fast-whisper", model_size="base", device="
 
     elif transcriber_enum == TranscriberType.GROQ:
         return get_groq_transcriber()
+
+    elif transcriber_enum in {TranscriberType.QWEN, TranscriberType.QWEN_ASR}:
+        return get_qwen_asr_transcriber()
 
     # fallback
     logger.warning(f'未识别转录器类型 "{transcriber_type}"，使用 fast-whisper 作为默认')

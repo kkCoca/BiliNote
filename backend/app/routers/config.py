@@ -10,6 +10,8 @@ from app.utils.logger import get_logger
 from app.utils.path_helper import get_model_dir
 
 from app.services.cookie_manager import CookieConfigManager
+from app.services.model import ModelService
+from app.services.provider import ProviderService
 from app.services.transcriber_config_manager import TranscriberConfigManager
 from ffmpeg_helper import ensure_ffmpeg_or_raise
 
@@ -45,10 +47,12 @@ def update_cookie(data: CookieUpdateRequest):
 class TranscriberConfigRequest(BaseModel):
     transcriber_type: str
     whisper_model_size: Optional[str] = None
+    qwen_asr_model: Optional[str] = None
 
 
 AVAILABLE_TRANSCRIBER_TYPES = [
     {"value": "fast-whisper", "label": "Faster Whisper（本地）"},
+    {"value": "qwen", "label": "Qwen（在线 ASR）"},
     {"value": "bcut", "label": "必剪（在线）"},
     {"value": "kuaishou", "label": "快手（在线）"},
     {"value": "groq", "label": "Groq（在线）"},
@@ -56,6 +60,34 @@ AVAILABLE_TRANSCRIBER_TYPES = [
 ]
 
 WHISPER_MODEL_SIZES = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"]
+DEFAULT_QWEN_ASR_MODELS = [
+    "qwen3-asr-flash",
+    "qwen-audio-asr",
+]
+
+
+def _extract_model_ids(models) -> list[str]:
+    data = getattr(models, "data", models)
+    if not isinstance(data, list):
+        return []
+
+    result = []
+    for model in data:
+        model_id = getattr(model, "id", None)
+        if model_id is None and isinstance(model, dict):
+            model_id = model.get("id") or model.get("model_name")
+        if isinstance(model_id, str) and "asr" in model_id.lower():
+            result.append(model_id)
+    return result
+
+
+def get_qwen_asr_models() -> list[str]:
+    provider = ProviderService.get_provider_by_id("qwen")
+    if not provider or not (provider.get("api_key") or "").strip():
+        return DEFAULT_QWEN_ASR_MODELS
+
+    models = _extract_model_ids(ModelService.get_model_list("qwen"))
+    return models or DEFAULT_QWEN_ASR_MODELS
 
 
 @router.get("/transcriber_config")
@@ -67,6 +99,7 @@ def get_transcriber_config():
         **config,
         "available_types": AVAILABLE_TRANSCRIBER_TYPES,
         "whisper_model_sizes": WHISPER_MODEL_SIZES,
+        "qwen_asr_models": get_qwen_asr_models(),
         "mlx_whisper_available": MLX_WHISPER_AVAILABLE,
     })
 
@@ -76,6 +109,7 @@ def update_transcriber_config(data: TranscriberConfigRequest):
     config = transcriber_config_manager.update_config(
         transcriber_type=data.transcriber_type,
         whisper_model_size=data.whisper_model_size,
+        qwen_asr_model=data.qwen_asr_model,
     )
     return R.success(data=config)
 

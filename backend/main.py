@@ -9,7 +9,7 @@ from starlette.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
 from app.db.init_db import init_db
-from app.db.provider_dao import seed_default_providers
+from app.db.provider_dao import seed_default_providers, migrate_qwen_bailian_to_qwen
 from app.exceptions.exception_handlers import register_exception_handlers
 # from app.db.model_dao import init_model_table
 # from app.db.provider_dao import init_provider_table
@@ -54,6 +54,7 @@ async def lifespan(app: FastAPI):
     _cfg = TranscriberConfigManager().get_config()
     logger.info(f"当前转写器配置: type={_cfg['transcriber_type']}, model_size={_cfg['whisper_model_size']}")
     seed_default_providers()
+    migrate_qwen_bailian_to_qwen()
     yield
 
 app = create_app(lifespan=lifespan)

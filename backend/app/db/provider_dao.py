@@ -2,6 +2,7 @@ import json
 import os
 import sys
 from app.db.models.providers import Provider
+from app.db.models.models import Model
 from app.utils.logger import get_logger
 from app.db.engine import get_engine, Base, get_db
 
@@ -91,6 +92,47 @@ def get_all_providers():
     db = next(get_db())
     try:
         return db.query(Provider).all()
+    finally:
+        db.close()
+
+
+def migrate_qwen_bailian_to_qwen():
+    db = next(get_db())
+    try:
+        qwen = db.query(Provider).filter_by(id="qwen").first()
+        legacy_providers = db.query(Provider).filter(
+            (Provider.id == "qwen-bailian") | (Provider.name.ilike("%bailian%"))
+        ).all()
+        legacy_provider_ids = [provider.id for provider in legacy_providers]
+        legacy = next((item for item in legacy_providers if (item.api_key or "").strip()), None)
+
+        if legacy:
+            if not qwen:
+                qwen = Provider(
+                    id="qwen",
+                    name="Qwen",
+                    api_key=legacy.api_key,
+                    base_url=legacy.base_url,
+                    logo="Qwen",
+                    type="built-in",
+                    enabled=legacy.enabled,
+                )
+                db.add(qwen)
+            elif not (qwen.api_key or "").strip():
+                qwen.api_key = legacy.api_key
+                qwen.base_url = legacy.base_url
+                qwen.enabled = legacy.enabled
+
+        for provider in legacy_providers:
+            db.delete(provider)
+        if legacy_provider_ids:
+            db.query(Model).filter(Model.provider_id.in_(legacy_provider_ids)).delete(synchronize_session=False)
+
+        db.commit()
+        if legacy_providers:
+            logger.info("Migrated and removed qwen-bailian provider config.")
+    except Exception as e:
+        logger.error(f"Failed to migrate qwen-bailian provider config: {e}")
     finally:
         db.close()
 

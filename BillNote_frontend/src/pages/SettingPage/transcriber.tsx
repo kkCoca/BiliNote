@@ -10,7 +10,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { AudioLines, AlertTriangle, CheckCircle2, Download, Loader2, Save, XCircle } from 'lucide-react'
+import { Input } from '@/components/ui/input'
+import { AudioLines, AlertTriangle, CheckCircle2, Download, Loader2, Save } from 'lucide-react'
 import { toast } from 'react-hot-toast'
 import {
   getTranscriberConfig,
@@ -24,22 +25,23 @@ import {
 const isWhisperType = (type: string) =>
   type === 'fast-whisper' || type === 'mlx-whisper'
 
+const isQwenType = (type: string) => type === 'qwen'
+
 export default function Transcriber() {
   const [config, setConfig] = useState<TranscriberConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [selectedType, setSelectedType] = useState('')
   const [selectedModelSize, setSelectedModelSize] = useState('')
+  const [selectedQwenModel, setSelectedQwenModel] = useState('')
   const [modelStatuses, setModelStatuses] = useState<ModelStatus[]>([])
   const [mlxModelStatuses, setMlxModelStatuses] = useState<ModelStatus[]>([])
-  const [mlxAvailable, setMlxAvailable] = useState(false)
 
   const fetchModelsStatus = useCallback(async () => {
     try {
       const data = await getModelsStatus()
       setModelStatuses(data.whisper)
       setMlxModelStatuses(data.mlx_whisper)
-      setMlxAvailable(data.mlx_available)
     } catch {
       // 静默失败，不阻塞主流程
     }
@@ -52,6 +54,7 @@ export default function Transcriber() {
         setConfig(data)
         setSelectedType(data.transcriber_type)
         setSelectedModelSize(data.whisper_model_size)
+        setSelectedQwenModel(data.qwen_asr_model)
       } catch {
         toast.error('获取转写器配置失败')
       } finally {
@@ -75,11 +78,18 @@ export default function Transcriber() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      const payload: { transcriber_type: string; whisper_model_size?: string } = {
+      const payload: {
+        transcriber_type: string
+        whisper_model_size?: string
+        qwen_asr_model?: string
+      } = {
         transcriber_type: selectedType,
       }
       if (isWhisperType(selectedType)) {
         payload.whisper_model_size = selectedModelSize
+      }
+      if (isQwenType(selectedType)) {
+        payload.qwen_asr_model = selectedQwenModel
       }
       await updateTranscriberConfig(payload)
       toast.success('转写器配置已保存')
@@ -176,6 +186,42 @@ export default function Transcriber() {
                 模型越大精度越高，但速度更慢、占用更多显存
               </p>
             </div>
+          )}
+
+          {isQwenType(selectedType) && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Qwen ASR 模型</label>
+              <Select value={selectedQwenModel} onValueChange={setSelectedQwenModel}>
+                <SelectTrigger className="w-full max-w-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {config.qwen_asr_models.map(model => (
+                    <SelectItem key={model} value={model}>
+                      {model}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Input
+                value={selectedQwenModel}
+                onChange={event => setSelectedQwenModel(event.target.value)}
+                className="w-full max-w-xs"
+                placeholder="输入其它可用的 Qwen ASR 模型名"
+              />
+              <p className="text-xs text-neutral-400">
+                若账号开通了其它 Qwen ASR 模型，可直接输入模型名称后保存
+              </p>
+            </div>
+          )}
+
+          {isQwenType(selectedType) && (
+            <Alert className="text-sm">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertDescription>
+                Qwen 使用模型供应商设置中的 Qwen API Key 和 Base URL，将音频提交到阿里 DashScope 在线语音识别。
+              </AlertDescription>
+            </Alert>
           )}
 
           {selectedType === 'mlx-whisper' && !config.mlx_whisper_available && (

@@ -563,11 +563,15 @@ class NoteGenerator:
 
         def _is_transcriber_configured(t: str) -> bool:
             """Skip cloud transcribers when not configured, to fail over fast."""
-            if t == "groq":
+            if t in {"groq", "qwen", "qwen-asr"}:
                 try:
                     from app.services.provider import ProviderService
 
-                    return bool(ProviderService.get_provider_by_id("groq"))
+                    if t in {"qwen", "qwen-asr"}:
+                        provider = ProviderService.get_provider_by_id("qwen")
+                        return bool(provider and (provider.get("api_key") or "").strip())
+                    provider = ProviderService.get_provider_by_id(t)
+                    return bool(provider and (provider.get("api_key") or "").strip())
                 except Exception:
                     return False
             return True
@@ -599,7 +603,7 @@ class NoteGenerator:
 
             # Online transcribers can be flaky; try a best-effort fallback chain so tasks still complete.
             # Prefer local first for stability.
-            fallback_order = ["fast-whisper", "groq", "kuaishou", "bcut"]
+            fallback_order = ["fast-whisper", "qwen", "groq", "kuaishou", "bcut"]
             fallback_order = [t for t in fallback_order if t != self.transcriber_type]
 
             device = os.getenv("WHISPER_DEVICE", "cuda")

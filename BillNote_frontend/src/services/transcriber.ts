@@ -3,8 +3,10 @@ import request from '@/utils/request'
 export interface TranscriberConfig {
   transcriber_type: string
   whisper_model_size: string
+  qwen_asr_model: string
   available_types: { value: string; label: string }[]
   whisper_model_sizes: string[]
+  qwen_asr_models: string[]
   mlx_whisper_available: boolean
 }
 
@@ -27,6 +29,7 @@ export const getTranscriberConfig = async (): Promise<TranscriberConfig> => {
 export const updateTranscriberConfig = async (data: {
   transcriber_type: string
   whisper_model_size?: string
+  qwen_asr_model?: string
 }) => {
   return await request.post('/transcriber_config', data)
 }
